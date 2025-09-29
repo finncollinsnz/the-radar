@@ -1,0 +1,91 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    /* ---------- USERS (profiles + device tokens) ---------- */
+    match /users/{uid} {
+      // Basic profile readable by any signed-in user
+      allow read: if isSignedIn();
+
+      // Only the owner can create/update/delete their profile
+      allow create: if isOwner(uid);
+      allow update, delete: if isOwner(uid);
+
+      // Push notification device tokens
+      match /tokens/{tokenId} {
+        // Only the owner can manage their tokens
+        allow read, create, update, delete: if isOwner(uid);
+      }
+    }
+
+    /* ---------- RADARS (per-user radar data) ---------- */
+    // Path: /radars/{uid}/people/{personId}/updates/{updateId}/comments/{commentId}
+    match /radars/{uid} {
+      allow read: if isSignedIn();
+      // Only the radar owner can write under their radar root
+      allow create, update, delete: if isOwner(uid);
+
+      match /people/{personId} {
+        allow read: if isSignedIn();
+        allow create, update, delete: if isOwner(uid);
+
+        match /updates/{updateId} {
+          allow read: if isSignedIn();
+          allow create, update, delete: if isOwner(uid);
+
+          match /comments/{commentId} {
+            // Anyone signed-in can read comments
+            allow read: if isSignedIn();
+            // Anyone signed-in can comment
+            allow create: if isSignedIn();
+            // Only the radar owner OR the comment author can edit/delete
+            allow update, delete: if isOwner(uid) ||
+              (isSignedIn() && request.auth.uid == resource.data.authorUid);
+          }
+        }
+      }
+    }
+
+    /* ---------- FRIEND REQUESTS ---------- */
+    match /friendRequests/{reqId} {
+      // Sender creates a pending request
+      allow create: if isSignedIn()
+        && request.resource.data.fromUid == request.auth.uid
+        && request.resource.data.toUid is string
+        && request.resource.data.status == "pending";
+
+      // Only sender or recipient can read
+      allow read: if isSignedIn()
+        && (resource.data.toUid == request.auth.uid
+            || resource.data.fromUid == request.auth.uid);
+
+      // Only the recipient can accept/decline
+      allow update: if isSignedIn()
+        && resource.data.toUid == request.auth.uid
+        && request.resource.data.status in ["accepted", "declined"];
+
+      allow delete: if false;
+    }
+
+    /* ---------- FRIENDSHIPS (pair docs) ---------- */
+    match /friendships/{docId} {
+      // Anyone can create a friendship doc that includes themselves
+      allow create: if isSignedIn()
+        && request.resource.data.members is list
+        && request.auth.uid in request.resource.data.members;
+
+      // Only members can read
+      allow read: if isSignedIn()
+        && request.auth.uid in resource.data.members;
+
+      allow update, delete: if false;
+    }
+  }
+}
