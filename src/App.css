@@ -757,6 +757,66 @@ a:hover { color: var(--accent-strong); }
 
 /* Tagline ping color tweak */
 .tag-ping { color: var(--accent); font-weight: 700; }
+
+/* Instruments (home) */
+.instrumentSubtitle {
+  width: 100%;
+  text-align: left;
+  font-family: 'Share Tech', system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  font-size: 20px;
+  color: rgba(255,255,255,0.92);
+  margin-top: 6px;
+}
+
+.instrumentList {
+  display: grid;
+  gap: 12px;
+  width: 100%;
+}
+
+.instrumentCard {
+  width: 100%;
+  border: 1px solid var(--accent);
+  border-radius: 16px;
+  background: rgba(10, 14, 13, 0.35);
+  padding: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.instrumentCard:active {
+  transform: scale(0.99);
+}
+
+.instrumentCardTitle {
+  font-family: 'Orbitron', system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  color: rgba(255,255,255,0.92);
+  font-size: 16px;
+  margin-bottom: 8px;
+}
+
+.instrumentRadarWrap {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+/* Profile header row with back */
+.profileHeaderRow {
+  display: grid;
+  grid-template-columns: 40px 1fr 40px;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.backBtn {
+  width: 40px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
 /* ========== Global Layout Centering ========== */
 
 /* Main wrapper centers content */
