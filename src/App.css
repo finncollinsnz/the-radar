@@ -761,7 +761,7 @@ a:hover { color: var(--accent-strong); }
 /* Instruments (home) */
 .instrumentSubtitle {
   width: 100%;
-  text-align: left;
+  text-align: center;
   font-family: 'Share Tech', system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
   font-size: 20px;
   color: rgba(255,255,255,0.92);
@@ -780,7 +780,7 @@ a:hover { color: var(--accent-strong); }
   border-radius: 16px;
   background: rgba(10, 14, 13, 0.35);
   padding: 12px;
-  text-align: left;
+  text-align: center;
   cursor: pointer;
 }
 
@@ -848,7 +848,7 @@ a:hover { color: var(--accent-strong); }
 .glass {
   max-width: 700px;
   margin: 0 auto 20px auto;
-  text-align: left; /* keep text in cards left-aligned for readability */
+  text-align: center; /* keep text in cards left-aligned for readability */
 }
 
 /* Lists (friends list, people list, requests) */
