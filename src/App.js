@@ -1,5 +1,5 @@
 // src/App.js
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import Auth from "./Auth";
 import { auth, db } from "./firebase";
@@ -62,7 +62,7 @@ const LogoutIcon = (p) => (
 
 /* ---- Shared radar geometry ---- */
 const EDGE_MARGIN = 16; // keep dots/labels away from the edge
-const RING_FRACTIONS = { inner: 0.30, medium: 0.58, outer: 0.90 };
+const RING_FRACTIONS = { relationship: 0.00, inner: 0.30, medium: 0.58, outer: 0.90 };
 const ringRadiusPx = (size, ring) =>
   (size / 2 - EDGE_MARGIN) * (RING_FRACTIONS[ring] || RING_FRACTIONS.medium);
 
@@ -369,6 +369,123 @@ function HomeView({ onOpenFriends, onOpenProfile, user }) {
   );
 }
 
+/* ---------------- Instruments (new Home) ---------------- */
+function InstrumentsView({ user, onOpenFriend }) {
+  const [friends, setFriends] = useState([]); // [{uid, displayName, username}]
+  const [peopleByUid, setPeopleByUid] = useState({}); // { [uid]: people[] }
+
+  // Live friends list
+  useEffect(() => {
+    if (!user?.uid) return;
+    const qf = query(collection(db, "friendships"), where("members", "array-contains", user.uid));
+    const unsub = onSnapshot(qf, async (snap) => {
+      const otherUids = [];
+      snap.forEach((d) => {
+        const mem = d.data().members || [];
+        const other = mem.find((x) => x !== user.uid);
+        if (other) otherUids.push(other);
+      });
+
+      const rows = [];
+      await Promise.allSettled(
+        otherUids.map(async (uid) => {
+          try {
+            const s = await getDoc(doc(db, "users", uid));
+            if (s.exists()) {
+              const data = s.data();
+              rows.push({
+                uid,
+                displayName: data.displayName || data.email || "Friend",
+                username: (data.username || "").toLowerCase(),
+              });
+            }
+          } catch (e) {
+            console.debug("Friend fetch skipped:", e?.code || e);
+          }
+        })
+      );
+
+      // stable sort by name
+      rows.sort((a, b) => (a.displayName || "").localeCompare(b.displayName || ""));
+      setFriends(rows);
+    });
+    return () => unsub();
+  }, [user?.uid]);
+
+  // Live people listeners per friend (so each card has a radar)
+  useEffect(() => {
+    if (!friends.length) {
+      setPeopleByUid({});
+      return;
+    }
+
+    const unsubs = [];
+    friends.forEach((f) => {
+      const qp = query(peopleCol(f.uid), orderBy("createdAt", "desc"), limit(50));
+      const unsub = onSnapshot(
+        qp,
+        (snap) => {
+          const arr = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+          setPeopleByUid((prev) => ({ ...prev, [f.uid]: arr }));
+        },
+        (err) => {
+          console.debug("people snapshot error:", err?.code || err);
+          setPeopleByUid((prev) => ({ ...prev, [f.uid]: [] }));
+        }
+      );
+      unsubs.push(unsub);
+    });
+
+    return () => {
+      unsubs.forEach((u) => {
+        try {
+          u();
+        } catch {
+          // ignore
+        }
+      });
+    };
+  }, [friends]);
+
+  return (
+    <main className="container">
+      <header className="appHeader" style={{ marginBottom: 10 }}>
+        <h1 className="title">The Radar</h1>
+        <div className="accent" />
+        <div className="instrumentSubtitle">Your instrument panel</div>
+      </header>
+
+      <section className="panel" style={{ width: "100%" }}>
+        {friends.length ? (
+          <div className="instrumentList">
+            {friends.map((f) => (
+              <button
+                key={f.uid}
+                className="instrumentCard"
+                type="button"
+                onClick={() => onOpenFriend(f)}
+                aria-label={`Open ${f.displayName || "friend"} radar`}
+              >
+                <div className="instrumentCardTitle">{(f.displayName || f.username || "Friend") + "’s Radar"}</div>
+                <div className="instrumentRadarWrap">
+                  <ProfileRadarAnimated size={300} people={peopleByUid[f.uid] || []} />
+                </div>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="glass" style={{ padding: 12, borderRadius: 14 }}>
+            <div className="h3" style={{ marginBottom: 6 }}>No friends yet</div>
+            <div className="subtle">
+              Add friends in Updates, then their radars will appear here.
+            </div>
+          </div>
+        )}
+      </section>
+    </main>
+  );
+}
+
 /* ---------------- FriendsView with Notifications ---------------- */
 function FriendsView({ meName, onSelectFriend, user }) {
   const [showFind, setShowFind] = useState(false);
@@ -381,6 +498,8 @@ function FriendsView({ meName, onSelectFriend, user }) {
 
   // 🔔 Notifications feed
   const [notifications, setNotifications] = useState([]);
+
+  const personNameByKeyRef = useRef({}); // { "ownerUid:personId": name }
 
   const friendMap = useMemo(() => {
     const m = {};
@@ -561,11 +680,12 @@ function FriendsView({ meName, onSelectFriend, user }) {
           const ts = data.createdAt?.toMillis?.() ?? 0;
           const ownerName = fr.displayName || fr.username || "Friend";
           const personName = data.name || "Unnamed";
+          personNameByKeyRef.current[`${fuid}:${d.id}`] = personName;
           items.push({
             id: `p:${fuid}:${d.id}`,
             _src: "people",
             ts,
-            text: `${ownerName} added ${personName} to their radar.`,
+            text: `${ownerName} added ${personName} to ${ownerName}'s radar.`,
           });
         });
         bucket.people = [
@@ -637,11 +757,17 @@ function FriendsView({ meName, onSelectFriend, user }) {
         const authorUid = data.authorUid || "anon";
 
         if (!friendIds.has(ownerUid) && !friendIds.has(authorUid)) return;
+        // Only show activity generated by your friends (not you)
+        if (authorUid === user.uid) return;
+        if (!friendIds.has(authorUid)) return;
 
         const ownerName =
           friendMap[ownerUid]?.displayName ||
           friendMap[ownerUid]?.username ||
           (ownerUid === user.uid ? (user.displayName || user.email || "You") : "Friend");
+
+        const personId = parts[3];
+        const personName = personNameByKeyRef.current[`${ownerUid}:${personId}`];
 
         const authorName =
           friendMap[authorUid]?.displayName ||
@@ -652,7 +778,7 @@ function FriendsView({ meName, onSelectFriend, user }) {
           id: `c:${docSnap.id}`,
           _src: "comments",
           ts,
-          text: `${authorName} commented on ${ownerName}'s radar update.`,
+          text: `${authorName} commented on ${ownerName}'s update${personName ? ` about ${personName}` : ""}.`,
         });
       });
 
@@ -669,8 +795,8 @@ function FriendsView({ meName, onSelectFriend, user }) {
   return (
     <main className="container">
       <header className="subHeader">
-        <h2 className="h2">Friends</h2>
-        <p className="subtle">Find friends by username & manage requests.</p>
+        <h2 className="h2">Updates</h2>
+        <p className="subtle">Friend requests, notifications, and recent activity.</p>
       </header>
 
       {/* Friends list */}
@@ -762,9 +888,10 @@ function FriendsView({ meName, onSelectFriend, user }) {
                   <div
                     style={{
                       fontSize: 14,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
+                      overflow: "visible",
+                      textOverflow: "clip",
+                      whiteSpace: "normal",
+                      wordBreak: "break-word",
                     }}
                     title={n.text}
                   >
@@ -981,7 +1108,7 @@ function ProfileRadarStatic({ size = 320, people = [] }) {
 }
 
 /* --------------- ProfileView (friend-aware) ----------------- */
-function ProfileView({ name = "User", uid }) {
+function ProfileView({ name = "User", uid, onBack = null, radarMode = "toggle" }) {
   const effectiveUid = uid;
   const currentUid = auth.currentUser?.uid || null;
   const isOwner = currentUid === effectiveUid;
@@ -997,7 +1124,12 @@ function ProfileView({ name = "User", uid }) {
   const [people, setPeople] = useState([]);
   const [selectedPersonId, setSelectedPersonId] = useState(null);
 
-  const [animated, setAnimated] = useState(true);
+  const [animated, setAnimated] = useState(radarMode === "toggle");
+
+  useEffect(() => {
+    if (radarMode === "static") setAnimated(false);
+    if (radarMode === "toggle") setAnimated(true);
+  }, [radarMode]);
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState({
@@ -1257,8 +1389,18 @@ function ProfileView({ name = "User", uid }) {
 
   return (
     <main className="container">
-      <header className="subHeader">
-        <h2 className="h2">{headerName}</h2>
+      <header className="subHeader" style={{ width: "100%" }}>
+        <div className="profileHeaderRow">
+          {onBack ? (
+            <button className="btn xs ghost backBtn" onClick={onBack} type="button" aria-label="Back">
+              ←
+            </button>
+          ) : (
+            <span />
+          )}
+          <h2 className="h2" style={{ margin: 0 }}>{headerName}</h2>
+          <span />
+        </div>
         {!isOwner && friendData?.username && <div className="subtle">@{friendData.username}</div>}
         {isOwner && (
           <div className="row" style={{ gap: 8, marginTop: 8 }}>
@@ -1270,33 +1412,33 @@ function ProfileView({ name = "User", uid }) {
       </header>
 
       {/* Radar card */}
-      <section className="glass" style={{ padding: 12, marginBottom: 12 }}>
-        <div className="row between" style={{ alignItems: "center", marginBottom: 8 }}>
-          <div className="h3">{headerName}’s Radar</div>
-          <div className="row" style={{ gap: 8 }}>
-            <button
-              className={`btn ${animated ? "primary" : "ghost"}`}
-              onClick={() => setAnimated(true)}
-              type="button"
-            >
-              Animated
-            </button>
-            <button
-              className={`btn ${!animated ? "primary" : "ghost"}`}
-              onClick={() => setAnimated(false)}
-              type="button"
-            >
-              Static
-            </button>
+      {radarMode !== "none" && (
+        <section className="glass" style={{ padding: 12, marginBottom: 12 }}>
+          <div className="row between" style={{ alignItems: "center", marginBottom: 8 }}>
+            <div className="h3">{headerName}’s Radar</div>
+            {radarMode === "toggle" && (
+              <div className="row" style={{ gap: 8 }}>
+                <button
+                  className={`btn ${animated ? "primary" : "ghost"}`}
+                  onClick={() => setAnimated(true)}
+                  type="button"
+                >
+                  Animated
+                </button>
+                <button
+                  className={`btn ${!animated ? "primary" : "ghost"}`}
+                  onClick={() => setAnimated(false)}
+                  type="button"
+                >
+                  Static
+                </button>
+              </div>
+            )}
           </div>
-        </div>
 
-        {animated ? (
-          <ProfileRadarAnimated size={320} people={people} />
-        ) : (
-          <ProfileRadarStatic size={320} people={people} />
-        )}
-      </section>
+          {animated ? <ProfileRadarAnimated size={320} people={people} /> : <ProfileRadarStatic size={320} people={people} />}
+        </section>
+      )}
 
       {/* People (master list) */}
       <section className="glass panel" style={{ padding: 12 }}>
@@ -1416,6 +1558,7 @@ function ProfileView({ name = "User", uid }) {
                   value={form.ring}
                   onChange={(e) => setForm((f) => ({ ...f, ring: e.target.value }))}
                 >
+                  <option value="relationship">in a relationship</option>
                   <option value="inner">inner</option>
                   <option value="medium">medium</option>
                   <option value="outer">outer</option>
@@ -1611,8 +1754,8 @@ function ProfileView({ name = "User", uid }) {
 function MainApp({ user }) {
   const meName = deriveNameFromUser(user);
 
-  // tabs: "home" | "friends" | "profile" (me) | "friendProfile" (someone else)
-  const [tab, setTab] = useState("home");
+  // tabs: "instruments" | "updates" | "profile" (me) | "instrumentFriend" (someone else)
+  const [tab, setTab] = useState("instruments");
   const [selectedProfile, setSelectedProfile] = useState(null);
 
   useEffect(() => {
@@ -1647,13 +1790,23 @@ function MainApp({ user }) {
 
   return (
     <>
-      {/* HOME */}
-      {tab === "home" && (
-        <HomeView user={user} onOpenFriends={() => setTab("friends")} onOpenProfile={() => setTab("profile")} />
+      {/* INSTRUMENTS (new home) */}
+      {tab === "instruments" && (
+        <InstrumentsView
+          user={user}
+          onOpenFriend={(friend) => {
+            setSelectedProfile({
+              uid: friend.uid,
+              displayName: friend.displayName,
+              username: friend.username,
+            });
+            setTab("instrumentFriend");
+          }}
+        />
       )}
 
-      {/* FRIENDS (list) */}
-      {tab === "friends" && (
+      {/* UPDATES (friend management + notifications) */}
+      {tab === "updates" && (
         <FriendsView
           user={user}
           meName={meName}
@@ -1663,7 +1816,7 @@ function MainApp({ user }) {
               displayName: friend.displayName,
               username: friend.username,
             });
-            setTab("friendProfile");
+            setTab("instrumentFriend");
           }}
         />
       )}
@@ -1673,25 +1826,30 @@ function MainApp({ user }) {
         <ProfileView key={`profile:me:${user.uid || "me"}`} uid={user.uid} name={meName || user.displayName || user.email || "Me"} />
       )}
 
-      {/* FRIEND'S PROFILE (read-only UI; nav keeps Friends active) */}
-      {tab === "friendProfile" && selectedProfile && (
+      {/* FRIEND'S PROFILE (from Instruments; read-only, back to Instruments) */}
+      {tab === "instrumentFriend" && selectedProfile && (
         <ProfileView
           key={`profile:friend:${selectedProfile.uid || "friend"}`}
           uid={selectedProfile.uid}
           name={selectedProfile.displayName || selectedProfile.username || "Friend"}
+          onBack={() => setTab("instruments")}
+          radarMode="static"
         />
       )}
 
       {/* NAV */}
       <nav className="nav">
-        <button className={`navBtn ${tab === "home" ? "active" : ""}`} onClick={() => setTab("home")}>
-          <HomeIcon /> <span>Home</span>
+        <button
+          className={`navBtn ${tab === "instruments" || tab === "instrumentFriend" ? "active" : ""}`}
+          onClick={() => setTab("instruments")}
+        >
+          <HomeIcon /> <span>Instruments</span>
         </button>
         <button
-          className={`navBtn ${tab === "friends" || tab === "friendProfile" ? "active" : ""}`}
-          onClick={() => setTab("friends")}
+          className={`navBtn ${tab === "updates" ? "active" : ""}`}
+          onClick={() => setTab("updates")}
         >
-          <UsersIcon /> <span>Friends</span>
+          <UsersIcon /> <span>Updates</span>
         </button>
         <button className={`navBtn ${tab === "profile" ? "active" : ""}`} onClick={() => setTab("profile")}>
           <UserIcon /> <span>Profile</span>
