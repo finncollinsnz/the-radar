@@ -21,6 +21,19 @@
   <!-- Meta -->
   <meta name="description" content="The Radar — a special site to track updates" />
   <title>The Radar</title>
+  <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
+<script>
+  window.OneSignalDeferred = window.OneSignalDeferred || [];
+  OneSignalDeferred.push(async function(OneSignal) {
+    await OneSignal.init({
+      appId: "40248b0d-7919-46dd-856a-ab9d26cd85ac",
+      notifyButton: {
+        enable: true
+      },
+      allowLocalhostAsSecureOrigin: true
+    });
+  });
+</script>
 </head>
 
 
