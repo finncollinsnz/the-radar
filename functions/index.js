@@ -96,3 +96,31 @@ exports.notifyCommentCreated = functions
       { url: "/friends", type: "comment", ownerUid, personId, updateId }
     );
   });
+// Friend request created
+exports.notifyFriendRequestCreated = functions
+  .region("us-central1")
+  .firestore.document("friendRequests/{requestId}")
+  .onCreate(async (snap, context) => {
+    const { requestId } = context.params;
+    const req = snap.data();
+
+    const fromUid = req?.fromUid;
+    const toUid = req?.toUid;
+
+    if (!fromUid || !toUid) return;
+
+    const tokens = await tokensFor([toUid], [fromUid]);
+
+    await sendToTokens(
+      tokens,
+      "New friend request",
+      "Someone sent you a friend request on The Radar",
+      {
+        url: "/friends",
+        type: "friendRequest",
+        requestId,
+        fromUid,
+        toUid,
+      }
+    );
+  });
